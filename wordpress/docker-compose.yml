@@ -1,0 +1,219 @@
+# docker network create wordpress-network
+# docker network create traefik-network
+# ssh -i testkey.sk -p 2222 ubuntu@your.address
+# mariadb -h db-multi -u wordpressdbuser -p'testpass'
+
+networks:
+  wordpress-network:
+    external: true
+  traefik-network:
+    external: true
+ 
+volumes:
+  wp-1-data:
+  wp-2-data:
+  db-multi-data:
+  traefik-certificates:
+ 
+services:
+  sshh:
+    image: archidoc422/sshh.mariadb
+    ports:
+      - "2222:2222"
+    user: "1000:1000"
+    environment:
+      TZ: Asia/Tokyo
+      SSH_PORT: 2222
+      SSH_USER: ubuntu
+      SSH_PUBLIC_KEY: ${SSH_PUBLIC_KEY}
+      HOST_PRIVATE_KEY: ${HOST_PRIVATE_KEY}
+      ALLOW_USERS: "ubuntu" #"*@10.* *@172.* *@192.168.*" "root" "root@127.0.0.1" # Restrict access to specific users and IP addresses (/etc/ssh/sshd_config).
+      StartupCommand1: "echo 'Hello, World!'"
+      CronJob1: "0 1 * * * /home/ubuntu/wordpress/backup.sh" # Run the backup job once daily.
+    volumes:
+    - /home/ubuntu/wordpress:/home/ubuntu/wordpress
+    - wp-1-data:/home/ubuntu/wp_1
+    - wp-2-data:/home/ubuntu/wp_2
+    networks:
+      - wordpress-network
+    restart: unless-stopped
+
+  db-multi:
+    image: ${WORDPRESS_MARIADB_IMAGE_TAG}
+    volumes:
+      - db-multi-data:/var/lib/mysql
+    ports:
+      - '3306:3306'
+    environment:
+      # MARIADB_DATABASE: wpdb_1 # Create a new database in the entrypoint script.
+      MARIADB_USER: ${WORDPRESS_DB_USER}
+      MARIADB_PASSWORD: ${DB_PASS}
+      MARIADB_ROOT_PASSWORD: ${DB_PASS}
+    entrypoint:
+      sh -c "
+        echo \"
+          CREATE DATABASE IF NOT EXISTS wpdb_1;
+          GRANT ALL ON wpdb_1.* TO '${WORDPRESS_DB_USER}'@'%';
+          CREATE DATABASE IF NOT EXISTS wpdb_2;
+          GRANT ALL ON wpdb_2.* TO '${WORDPRESS_DB_USER}'@'%';
+        \" > /docker-entrypoint-initdb.d/init.sql;  
+        /usr/local/bin/docker-entrypoint.sh --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+      "
+    networks:
+      - wordpress-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  wp-1:
+    image: ${WORDPRESS_IMAGE_TAG}
+    volumes:
+      - wp-1-data:/bitnami/wordpress
+    environment:
+      WORDPRESS_DATABASE_HOST: db-multi
+      WORDPRESS_DATABASE_PORT_NUMBER: 3306
+      WORDPRESS_DATABASE_NAME: wpdb_1
+      WORDPRESS_DATABASE_USER: ${WORDPRESS_DB_USER}
+      WORDPRESS_DATABASE_PASSWORD: ${DB_PASS}
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX}
+      WORDPRESS_BLOG_NAME: ${WORDPRESS_1_BLOG_NAME}
+      WORDPRESS_FIRST_NAME: ${WORDPRESS_ADMIN_FIRSTNAME}
+      WORDPRESS_LAST_NAME: ${WORDPRESS_ADMIN_LASTNAME}
+      WORDPRESS_USERNAME: ${WORDPRESS_ADMIN_NAME}
+      WORDPRESS_PASSWORD: ${WORDPRESS_PASS}
+      WORDPRESS_EMAIL: ${WORDPRESS_ADMIN_EMAIL}
+      # WORDPRESS_SMTP_HOST: ${WORDPRESS_SMTP_ADDRESS}
+      # WORDPRESS_SMTP_PORT: ${WORDPRESS_SMTP_PORT}
+      # WORDPRESS_SMTP_USER: ${WORDPRESS_SMTP_USER_NAME}
+      # WORDPRESS_SMTP_PASSWORD: ${WORDPRESS_SMTP_PASSWORD}
+    networks:
+      - wordpress-network
+      - traefik-network
+    healthcheck:
+      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wp-1.rule=Host(`${WORDPRESS_1_HOSTNAME}`)"
+      - "traefik.http.routers.wp-1.service=wp-1"
+      - "traefik.http.routers.wp-1.entrypoints=websecure"
+      - "traefik.http.services.wp-1.loadbalancer.server.port=8080"
+      - "traefik.http.routers.wp-1.tls=true"
+      - "traefik.http.routers.wp-1.tls.certresolver=letsencrypt"
+      - "traefik.http.services.wp-1.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.wp-1.middlewares=compresstraefik"
+      - "traefik.http.middlewares.compresstraefik.compress=true"
+      - "traefik.docker.network=traefik-network"
+    restart: unless-stopped
+    depends_on:
+      db-multi:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+
+  wp-2:
+    image: ${WORDPRESS_IMAGE_TAG}
+    volumes:
+      - wp-2-data:/bitnami/wordpress
+    environment:
+      WORDPRESS_DATABASE_HOST: db-multi
+      WORDPRESS_DATABASE_PORT_NUMBER: 3306
+      WORDPRESS_DATABASE_NAME: wpdb_2
+      WORDPRESS_DATABASE_USER: ${WORDPRESS_DB_USER}
+      WORDPRESS_DATABASE_PASSWORD: ${DB_PASS}
+      WORDPRESS_TABLE_PREFIX: ${WORDPRESS_TABLE_PREFIX}
+      WORDPRESS_BLOG_NAME: ${WORDPRESS_2_BLOG_NAME}
+      WORDPRESS_FIRST_NAME: ${WORDPRESS_ADMIN_FIRSTNAME}
+      WORDPRESS_LAST_NAME: ${WORDPRESS_ADMIN_LASTNAME}
+      WORDPRESS_USERNAME: ${WORDPRESS_ADMIN_NAME}
+      WORDPRESS_PASSWORD: ${WORDPRESS_PASS}
+      WORDPRESS_EMAIL: ${WORDPRESS_ADMIN_EMAIL}
+    networks:
+      - wordpress-network
+      - traefik-network
+    healthcheck:
+      test: timeout 10s bash -c ':> /dev/tcp/127.0.0.1/8080' || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wp-2.rule=Host(`${WORDPRESS_2_HOSTNAME}`)"
+      - "traefik.http.routers.wp-2.service=wp-2"
+      - "traefik.http.routers.wp-2.entrypoints=websecure"
+      - "traefik.http.services.wp-2.loadbalancer.server.port=8080"
+      - "traefik.http.routers.wp-2.tls=true"
+      - "traefik.http.routers.wp-2.tls.certresolver=letsencrypt"
+      - "traefik.http.services.wp-2.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.wp-2.middlewares=compresstraefik"
+      - "traefik.http.middlewares.compresstraefik.compress=true"
+      - "traefik.docker.network=traefik-network"
+    restart: unless-stopped
+    depends_on:
+      db-multi:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+
+  traefik:
+    image: ${TRAEFIK_IMAGE_TAG}
+    command:
+      - "--log.level=${TRAEFIK_LOG_LEVEL}"
+      - "--accesslog=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+      - "--entryPoints.ping.address=:8082"
+      - "--entryPoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure" # Redirect to https
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entryPoints.websecure.address=:443"
+      - "--providers.docker=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedByDefault=false"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--global.checkNewVersion=true"
+      - "--global.sendAnonymousUsage=false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping","--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_HOSTNAME}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+      - "traefik.http.middlewares.authtraefik.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+      - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    restart: unless-stopped
