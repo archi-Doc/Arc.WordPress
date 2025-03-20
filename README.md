@@ -31,7 +31,7 @@
 
 アーキテクチャ図は以下の通り。
 
-![](WordPress.png)
+![](https://github.com/archi-Doc/Arc.WordPress/blob/main/WordPress.png)
 
 [sshh](https://github.com/archi-Doc/sshh)というのは、SSHを介してコンテナ環境にアクセスするためのコンテナ。
 
